@@ -43,9 +43,6 @@ jobs:
           KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
         run: |
           mkdir -p ~/.kaggle
-          echo '{"username":"'"$KAGGLE_USERNAME"'","key":"'"$KAGGLE_KEY"'"}' > ~/.kaggle/kaggle.json
+          echo '{"username":"'"'"'$KAGGLE_USERNAME'"'"'","key":"'"'"'$KAGGLE_KEY'"'"'"}' > ~/.kaggle/kaggle.json
           chmod 600 ~/.kaggle/kaggle.json
-          kaggle datasets version \
-            -p data/raw \
-            -m "Auto update: $(date +'%Y-%m-%d')" \
-            --dir-mode zip
+          kaggle datasets version -p data/raw -m "Auto update: $(date +'%Y-%m-%d')" --dir-mode zip
