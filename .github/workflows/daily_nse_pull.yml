@@ -16,7 +16,9 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -33,10 +35,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin main
           git add data/raw/nifty500_ohlcv_raw.parquet
           git diff --staged --quiet || git commit -m "Auto: NSE data update $(date +'%Y-%m-%d')"
-          git push
+          git push --force-with-lease origin main
 
       - name: Push new Kaggle dataset version
         env:
