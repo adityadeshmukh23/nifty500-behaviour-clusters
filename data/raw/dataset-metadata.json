@@ -1,0 +1,39 @@
+
+{
+
+  "title": "Nifty 500 Daily OHLCV 2022-Present (Auto-Updated)",
+
+  "id": "adityadeshmukh05/nifty500-daily-ohlcv",
+
+  "licenses": [{"name": "CC0-1.0"}],
+
+  "keywords": [
+
+    "finance", "india", "nse", "stocks", "equity",
+
+    "nifty500", "time series", "ohlcv"
+
+  ],
+
+  "resources": [
+
+    {
+
+      "path": "nifty500_ohlcv_raw.parquet",
+
+      "description": "Daily OHLCV for Nifty 500 stocks from Jan 2022. Auto-updated every weekday."
+
+    },
+
+    {
+
+      "path": "nifty500_constituents.csv",
+
+      "description": "Nifty 500 constituent list with sector and industry labels."
+
+    }
+
+  ]
+
+}
+
