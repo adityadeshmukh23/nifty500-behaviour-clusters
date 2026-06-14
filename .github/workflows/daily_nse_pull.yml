@@ -24,7 +24,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install yfinance pandas pyarrow kaggle
+        run: pip install yfinance pandas pyarrow kaggle==1.6.17
 
       - name: Fetch new NSE data
         run: python scripts/fetch_daily.py
@@ -43,6 +43,7 @@ jobs:
           KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
         run: |
           mkdir -p ~/.kaggle
-          echo '{"username":"'"'"'$KAGGLE_USERNAME'"'"'","key":"'"'"'$KAGGLE_KEY'"'"'"}' > ~/.kaggle/kaggle.json
+          echo '{"username":"'$KAGGLE_USERNAME'","key":"'$KAGGLE_KEY'"}' > ~/.kaggle/kaggle.json
           chmod 600 ~/.kaggle/kaggle.json
+          pip install kaggle==1.6.17
           kaggle datasets version -p data/raw -m "Auto update: $(date +'%Y-%m-%d')" --dir-mode zip
