@@ -1,0 +1,6 @@
+# Pinned for reproducibility. yfinance in particular changes its
+# response schema between minor versions; unpinning it breaks the pipeline.
+yfinance==0.2.51
+pandas==2.2.3
+pyarrow==18.1.0
+kaggle==1.6.17
