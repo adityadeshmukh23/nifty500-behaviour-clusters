@@ -18,15 +18,17 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          lfs: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
 
       - name: Install dependencies
-        run: pip install yfinance pandas pyarrow kaggle==1.6.17
+        run: pip install -r requirements.txt
 
       - name: Fetch new NSE data
         run: python scripts/fetch_daily.py
@@ -37,7 +39,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/raw/nifty500_ohlcv_raw.parquet
           git diff --staged --quiet || git commit -m "Auto: NSE data update $(date +'%Y-%m-%d')"
-          git push --force-with-lease origin main
+          git push origin main
 
       - name: Push new Kaggle dataset version
         env:
@@ -45,6 +47,10 @@ jobs:
           KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
         run: |
           mkdir -p ~/.kaggle
-          echo '{"username":"'$KAGGLE_USERNAME'","key":"'$KAGGLE_KEY'"}' > ~/.kaggle/kaggle.json
+          python - <<'PY' > ~/.kaggle/kaggle.json
+          import json, os
+          print(json.dumps({"username": os.environ["KAGGLE_USERNAME"],
+                            "key": os.environ["KAGGLE_KEY"]}))
+          PY
           chmod 600 ~/.kaggle/kaggle.json
           kaggle datasets version -p data/raw -m "Auto update: $(date +'%Y-%m-%d')" --dir-mode zip
