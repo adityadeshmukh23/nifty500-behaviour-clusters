@@ -123,6 +123,19 @@ Beta comes out with a mean of exactly 1.00 — a built-in check that the market 
               │ .parquet  (master)    │            │  (new version pushed)  │
               └───────────┬───────────┘            └────────────────────────┘
                           │
+                          ├───────────▶ ┌──────────────────────────────┐
+                          │             │ monitoring                   │
+                          │             │                              │
+                          │             │  a failed run opens (or      │
+                          │             │  comments on) a              │
+                          │             │  pipeline-failure issue;     │
+                          │             │  the next success closes it  │
+                          │             │                              │
+                          │             │  check_freshness.py, on its  │
+                          │             │  own cron: newest bar older  │
+                          │             │  than 3 business days →      │
+                          │             │  data-stale issue            │
+                          │             └──────────────────────────────┘
                           ▼
               ┌────────────────────────────────────────────┐
               │ src/features.py    → 438 x 10 features      │
@@ -143,6 +156,7 @@ Beta comes out with a mean of exactly 1.00 — a built-in check that the market 
 - *Parquet as the master, not a database.* Append-only, single-writer, read in full by the analysis — a columnar file beats the operational cost of hosting Postgres for this access pattern.
 - *De-duplication on the natural key.* `yfinance` will happily return an overlapping window; `(symbol, date)` uniqueness is enforced on our side rather than trusted.
 - *Market proxy built from the universe.* An equal-weight index computed from these same prices can't drift out of sync with the master the way an external benchmark file would.
+- *Monitoring split in two.* Failure alerting watches the pipeline; the freshness check watches the data. They catch disjoint failure modes — a run that fails is loud, a run that stops happening or succeeds while writing nothing is silent — so neither alone is sufficient. Each raises its own labelled issue and clears it on recovery.
 - *Cluster names derived by rule, not typed in.* Names come from each cluster's own profile, so they survive a re-run that permutes cluster ids — and the two distinctive names are conditional, so a 3-way split doesn't relabel its calmest group "Tail-risk" purely for being least calm.
 
 ---
@@ -164,7 +178,7 @@ Reproduce the analysis end to end:
 
 ```bash
 jupyter lab notebooks/       # run 01 then 02
-pytest tests/ -v             # 25 tests over the feature and clustering math
+pytest tests/ -v             # 38 tests over the feature, clustering and freshness logic
 ```
 
 Run the incremental data fetch:
@@ -210,9 +224,12 @@ No credentials are stored in the repository; `kaggle.json`, `.env`, and `secrets
 
 ```
 nifty500-behaviour-clusters/
-├── .github/workflows/
-│   ├── daily_nse_pull.yml          # cron: fetch → commit → publish to Kaggle
-│   └── tests.yml                   # pytest on every push and PR
+├── .github/
+│   ├── actions/alert-issue/        # composite: open/dedupe/close a tracking issue
+│   └── workflows/
+│       ├── daily_nse_pull.yml      # cron: fetch → commit → publish to Kaggle
+│       ├── freshness.yml           # cron: assert the master has not gone stale
+│       └── tests.yml               # pytest on every push and PR
 ├── data/
 │   ├── raw/
 │   │   ├── nifty500_ohlcv_raw.parquet   # master dataset (LFS, 19.7 MB)
@@ -230,10 +247,12 @@ nifty500-behaviour-clusters/
 │   ├── features.py                      # OHLCV → behavioural features
 │   └── clustering.py                    # PCA, k diagnostics, naming
 ├── scripts/
-│   └── fetch_daily.py                   # incremental, idempotent fetch
+│   ├── fetch_daily.py                   # incremental, idempotent fetch
+│   └── check_freshness.py               # staleness backstop
 ├── tests/
 │   ├── test_features.py                 # feature math on known price paths
-│   └── test_clustering.py               # reduction, stability, naming rules
+│   ├── test_clustering.py               # reduction, stability, naming rules
+│   └── test_freshness.py                # staleness calendar edges
 ├── docs/                                # generated figures
 ├── pyproject.toml                       # pytest config
 ├── requirements.txt                     # pipeline runtime
@@ -250,6 +269,8 @@ nifty500-behaviour-clusters/
 
 **A green build is not a working build.** Fixing the checkout turned the badge green — and the job still fetched nothing, because the pinned `yfinance` was too old to talk to the current Yahoo API and the script reported the empty result as "likely a market holiday". Exit code 0 was lying. The real fix was making failure *loud*: an empty multi-day window or a >10% symbol miss now exits non-zero. A pipeline that cannot fail visibly cannot be trusted when it succeeds.
 
+**Alerting on failure is only half of monitoring.** After the pipeline had failed 50 times unnoticed, the obvious fix was to alert on failure — open an issue naming the failing step, close it on recovery. But that only fires when a run *fails*, and the outage's real shape was runs that stopped mattering: a schedule disabled after inactivity, or a job going green while writing nothing. So a second check asserts freshness against the data itself — is the newest bar within three business days? — and catches exactly the cases the first one structurally cannot see. I tested both by pushing deliberately broken branches, because an untested alert is just another thing that fails silently.
+
 **The metric is not the answer.** Silhouette peaked at k=2 and would have "chosen" a two-way high-beta/low-beta split. Its absolute value (~0.2) was the more informative number: it said the data is a continuum, so *no* k is truly right and the real job is picking a resolution that reproduces under resampling. Reporting the sweep and the reasoning is more defensible than reporting an argmax.
 
 **Fourth moments are hostage to single data points.** Seven observations out of 325,661 — 0.002% — were setting peak kurtosis at 331. Unadjusted corporate actions don't look like outliers in a price chart; they look like a stock that lost 80% in a day. Any feature built on higher moments needs an artifact check before it means anything.
@@ -263,7 +284,6 @@ nifty500-behaviour-clusters/
 ## Roadmap
 
 - [ ] Cluster stability across rolling windows — does membership persist through regime changes?
-- [ ] Freshness assertion in CI (fail if the master's max date lags the last trading day)
 - [ ] Extend history to 2015 for a full market-cycle view
 - [ ] Corporate-action audit against NSE bhavcopy, rather than threshold masking
 - [ ] Compare KMeans against HDBSCAN, which doesn't assume spherical clusters
