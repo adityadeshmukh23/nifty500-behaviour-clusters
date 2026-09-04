@@ -7,6 +7,11 @@ import sys
 PARQUET_PATH = Path("data/raw/nifty500_ohlcv_raw.parquet")
 CONSTITUENTS_PATH = Path("data/raw/nifty500_constituents.csv")
 
+# Fail loudly rather than exiting 0 on a partial or empty fetch: a silent
+# success here is what let 50 scheduled runs look like market holidays.
+MAX_MISSING_RATIO = 0.10
+MAX_HOLIDAY_GAP_DAYS = 5
+
 def is_weekend():
     if datetime.today().weekday() >= 5:
         print("Today is a weekend. No market data expected.")
@@ -34,24 +39,29 @@ def fetch_new_data(symbols_ns, start_date, end_date):
 
 def reshape_to_long(data, symbols_ns):
     frames = []
+    missing = []
     for symbol_ns in symbols_ns:
         try:
             df = data[symbol_ns].copy()
             df = df.dropna(how="all")
             if len(df) == 0:
+                missing.append(symbol_ns)
                 continue
             df["symbol"] = symbol_ns.replace(".NS", "")
             df = df.reset_index()
             df.columns = [c.lower() for c in df.columns]
             frames.append(df)
         except KeyError:
-            pass
+            missing.append(symbol_ns)
+    if missing:
+        print(f"No data for {len(missing)}/{len(symbols_ns)} symbols: "
+              f"{', '.join(missing[:10])}{' ...' if len(missing) > 10 else ''}")
     if not frames:
-        return pd.DataFrame()
+        return pd.DataFrame(), missing
     combined = pd.concat(frames, ignore_index=True)
     combined = combined[["symbol", "date", "open", "high", "low", "close", "volume"]]
     combined["date"] = pd.to_datetime(combined["date"])
-    return combined
+    return combined, missing
 
 def main():
     if is_weekend():
@@ -71,15 +81,31 @@ def main():
 
     raw = fetch_new_data(symbols_ns, fetch_start, fetch_end)
 
+    requested_days = (fetch_end - fetch_start).days
+
     if raw is None or raw.empty:
+        # A one- or two-day window can legitimately be a market holiday.
+        # A wide window returning nothing means the upstream API broke.
+        if requested_days > MAX_HOLIDAY_GAP_DAYS:
+            print(f"FAIL: no data for a {requested_days}-day window across "
+                  f"{len(symbols_ns)} symbols. This is not a holiday — "
+                  f"the upstream API or the yfinance version is broken.")
+            sys.exit(1)
         print("No new data returned — likely a market holiday.")
         sys.exit(0)
 
-    new_df = reshape_to_long(raw, symbols_ns)
+    new_df, missing = reshape_to_long(raw, symbols_ns)
+
+    missing_ratio = len(missing) / len(symbols_ns)
+    if missing_ratio > MAX_MISSING_RATIO:
+        print(f"FAIL: {missing_ratio:.0%} of symbols returned no data "
+              f"(threshold {MAX_MISSING_RATIO:.0%}). Refusing to commit a "
+              f"partial update.")
+        sys.exit(1)
 
     if new_df.empty:
-        print("No rows after reshape. Exiting.")
-        sys.exit(0)
+        print("FAIL: no rows after reshape despite a non-empty response.")
+        sys.exit(1)
 
     print(f"New rows fetched: {len(new_df)}")
 
