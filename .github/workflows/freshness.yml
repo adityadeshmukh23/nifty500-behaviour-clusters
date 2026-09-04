@@ -1,0 +1,83 @@
+name: Data Freshness
+
+# The daily pull's own alerting only fires when a run *fails*. It is silent
+# when runs stop happening at all -- a schedule disabled after repository
+# inactivity, an expired secret, or a job that succeeds while writing nothing.
+# This checks the data itself instead of the pipeline, so staleness surfaces
+# regardless of the cause.
+on:
+  schedule:
+    - cron: "30 14 * * 1-5"      # 20:00 IST, ~90 min after the daily pull
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      max_lag:
+        description: Business days of staleness to tolerate
+        required: false
+        default: "3"
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  ALERT_LABEL: data-stale
+
+jobs:
+  freshness:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Assert the master is current
+        id: freshness
+        run: python scripts/check_freshness.py --max-lag "${{ inputs.max_lag || 3 }}"
+
+      - name: Raise or update the staleness alert
+        if: failure()
+        uses: ./.github/actions/alert-issue
+        with:
+          mode: open
+          label: ${{ env.ALERT_LABEL }}
+          title: Dataset has gone stale
+          token: ${{ secrets.GITHUB_TOKEN }}
+          detail: |
+            The OHLCV master has not received new bars within the tolerated window,
+            so the daily pull is no longer landing data.
+
+            This check looks at the data rather than the pipeline, so it fires even
+            when no run has failed — including when the schedule has stopped firing
+            at all.
+
+            Where to look, most likely first:
+
+            1. **The schedule was disabled.** GitHub turns off scheduled workflows in
+               public repositories after a stretch of inactivity. Check the Actions
+               tab for a banner and re-enable it.
+            2. **Runs are green but writing nothing.** Open the latest `Daily NSE
+               Pull` run and confirm it reported `New rows fetched`.
+            3. **Credentials expired.** `KAGGLE_USERNAME` / `KAGGLE_KEY` failing can
+               fail the job after the fetch but before anything useful is committed.
+
+      - name: Clear the staleness alert
+        if: success()
+        uses: ./.github/actions/alert-issue
+        with:
+          mode: close
+          label: ${{ env.ALERT_LABEL }}
+          title: Dataset has gone stale
+          token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,97 @@
+name: Alert via tracking issue
+description: >
+  Open a labelled tracking issue when a job fails, comment on it rather than
+  filing a duplicate while it keeps failing, and close it on the next success.
+
+inputs:
+  mode:
+    description: '"open" to raise or update the alert, "close" to clear it'
+    required: true
+  label:
+    description: Label identifying this alert stream; one open issue per label
+    required: true
+  title:
+    description: Issue title used when opening a new alert
+    required: true
+  detail:
+    description: Markdown body explaining the failure
+    required: false
+    default: ''
+  token:
+    description: Token with issues:write
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # Note: this is a local action, so it only exists once the repo is checked
+    # out. A failure in the checkout step itself will surface as a red run
+    # without an issue -- acceptable, since that failure mode is loud anyway.
+    - uses: actions/github-script@v7
+      env:
+        ALERT_MODE: ${{ inputs.mode }}
+        ALERT_LABEL: ${{ inputs.label }}
+        ALERT_TITLE: ${{ inputs.title }}
+        ALERT_DETAIL: ${{ inputs.detail }}
+      with:
+        github-token: ${{ inputs.token }}
+        script: |
+          const mode = process.env.ALERT_MODE;
+          const label = process.env.ALERT_LABEL;
+          const title = process.env.ALERT_TITLE;
+          const detail = process.env.ALERT_DETAIL || '';
+          const { owner, repo } = context.repo;
+          const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+          const today = new Date().toISOString().slice(0, 10);
+
+          const open = async () => {
+            try {
+              await github.rest.issues.createLabel({
+                owner, repo, name: label, color: 'b60205',
+                description: 'Automated pipeline alert',
+              });
+            } catch (error) {
+              if (error.status !== 422) throw error;   // 422 = already exists
+            }
+
+            const existing = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: label,
+            });
+
+            const body = `${detail}\n\n**Run:** ${runUrl}\n**Date:** ${today}`;
+
+            if (existing.data.length > 0) {
+              const issue = existing.data[0];
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: issue.number,
+                body: `Still failing on ${today}.\n\n${body}`,
+              });
+              core.notice(`Commented on existing issue #${issue.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner, repo, title, labels: [label], body,
+              });
+              core.notice(`Opened issue #${created.data.number}`);
+            }
+          };
+
+          const close = async () => {
+            const existing = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: label,
+            });
+            for (const issue of existing.data) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: issue.number,
+                body: `Recovered — this check passed again.\n\n${runUrl}`,
+              });
+              await github.rest.issues.update({
+                owner, repo, issue_number: issue.number,
+                state: 'closed', state_reason: 'completed',
+              });
+              core.notice(`Closed issue #${issue.number}`);
+            }
+          };
+
+          if (mode === 'open') await open();
+          else if (mode === 'close') await close();
+          else throw new Error(`unknown mode: ${mode}`);
