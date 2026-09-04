@@ -235,6 +235,7 @@ nifty500-behaviour-clusters/
 │   ├── test_features.py                 # feature math on known price paths
 │   └── test_clustering.py               # reduction, stability, naming rules
 ├── docs/                                # generated figures
+├── pyproject.toml                       # pytest config
 ├── requirements.txt                     # pipeline runtime
 ├── requirements-analysis.txt            # notebooks + tests
 ├── LICENSE

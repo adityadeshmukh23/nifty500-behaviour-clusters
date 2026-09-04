@@ -1,0 +1,6 @@
+[tool.pytest.ini_options]
+# Put the repo root on sys.path so `from src.features import ...` resolves when
+# tests are run as plain `pytest tests/` and not only as `python -m pytest`.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
