@@ -263,7 +263,6 @@ nifty500-behaviour-clusters/
 ## Roadmap
 
 - [ ] Cluster stability across rolling windows — does membership persist through regime changes?
-- [ ] Alerting on scheduled-run failure
 - [ ] Freshness assertion in CI (fail if the master's max date lags the last trading day)
 - [ ] Extend history to 2015 for a full market-cycle view
 - [ ] Corporate-action audit against NSE bhavcopy, rather than threshold masking

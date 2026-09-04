@@ -7,6 +7,10 @@ on:
 
 permissions:
   contents: write
+  issues: write
+
+env:
+  ALERT_LABEL: pipeline-failure
 
 jobs:
   fetch-and-upload:
@@ -31,9 +35,11 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Fetch new NSE data
+        id: fetch
         run: python scripts/fetch_daily.py
 
       - name: Commit updated data
+        id: commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -42,6 +48,7 @@ jobs:
           git push origin main
 
       - name: Push new Kaggle dataset version
+        id: kaggle
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
@@ -54,3 +61,121 @@ jobs:
           PY
           chmod 600 ~/.kaggle/kaggle.json
           kaggle datasets version -p data/raw -m "Auto update: $(date +'%Y-%m-%d')" --dir-mode zip
+
+      # A scheduled job with no alerting is a job you do not have: this pipeline
+      # failed 50 times in a row without anyone noticing. On failure, raise one
+      # tracking issue (and comment on it thereafter rather than filing a new one
+      # every weekday); on the next success, close it.
+      - name: Raise or update the failure issue
+        if: failure()
+        uses: actions/github-script@v7
+        env:
+          OUTCOME_CHECKOUT_FETCH: ${{ steps.fetch.outcome }}
+          OUTCOME_COMMIT: ${{ steps.commit.outcome }}
+          OUTCOME_KAGGLE: ${{ steps.kaggle.outcome }}
+        with:
+          script: |
+            const label = process.env.ALERT_LABEL;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}` +
+                           `/actions/runs/${context.runId}`;
+
+            // Read step outcomes from the runner rather than the REST API: while
+            // the job is still in progress the API has not recorded them yet, and
+            // every alert reports "unknown step".
+            const failed = [
+              ['Fetch new NSE data', process.env.OUTCOME_CHECKOUT_FETCH],
+              ['Commit updated data', process.env.OUTCOME_COMMIT],
+              ['Push new Kaggle dataset version', process.env.OUTCOME_KAGGLE],
+            ].filter(([, outcome]) => outcome === 'failure').map(([name]) => name);
+            const failedStep = failed.length
+              ? failed.join(', ')
+              : 'setup or checkout (no pipeline step recorded a failure)';
+
+            const today = new Date().toISOString().slice(0, 10);
+            const detail = [
+              `**Failing step:** \`${failedStep}\``,
+              `**Run:** ${runUrl}`,
+              `**Date:** ${today}`,
+              '',
+              'Known causes for this pipeline, most likely first:',
+              '',
+              '1. `yfinance` broke against the Yahoo API again — check whether the log says',
+              '   `FAIL: no data for a N-day window`. The pin in `requirements.txt` needs a bump.',
+              '2. More than 10% of symbols returned nothing — upstream is degraded, or the',
+              '   constituents list has drifted.',
+              '3. LFS objects were not checked out, so `pd.read_parquet` got a pointer stub.',
+              '   Confirm `lfs: true` is still on the checkout step.',
+            ].join('\n');
+
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label,
+                color: 'b60205',
+                description: 'The scheduled NSE data pull is failing',
+              });
+            } catch (error) {
+              if (error.status !== 422) throw error;   // 422 = label already exists
+            }
+
+            const open = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: label,
+            });
+
+            if (open.data.length > 0) {
+              const issue = open.data[0];
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `Still failing on ${today}.\n\n${detail}`,
+              });
+              core.notice(`Commented on existing issue #${issue.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'Daily NSE pull is failing',
+                labels: [label],
+                body: `The scheduled data pull failed and the dataset is no longer ` +
+                      `updating.\n\n${detail}`,
+              });
+              core.notice(`Opened issue #${created.data.number}`);
+            }
+
+      - name: Close the failure issue after a recovery
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const label = process.env.ALERT_LABEL;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}` +
+                           `/actions/runs/${context.runId}`;
+
+            const open = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: label,
+            });
+
+            for (const issue of open.data) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `Recovered — the pipeline completed successfully.\n\n${runUrl}`,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+                state_reason: 'completed',
+              });
+              core.notice(`Closed issue #${issue.number}`);
+            }
