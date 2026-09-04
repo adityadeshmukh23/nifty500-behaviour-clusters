@@ -1,6 +1,6 @@
 # Nifty 500 Behaviour Clusters
 
-**An automated NSE market-data pipeline that maintains a 375k-row daily OHLCV dataset for the Nifty 500 — built as the foundation for clustering stocks by how they *behave* rather than by which sector they're labelled with.**
+**An automated NSE market-data pipeline that maintains a 527k-row daily OHLCV dataset for the Nifty 500 — built as the foundation for clustering stocks by how they *behave* rather than by which sector they're labelled with.**
 
 [![Daily NSE Pull](https://github.com/adityadeshmukh23/nifty500-behaviour-clusters/actions/workflows/daily_nse_pull.yml/badge.svg)](https://github.com/adityadeshmukh23/nifty500-behaviour-clusters/actions/workflows/daily_nse_pull.yml)
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
@@ -33,26 +33,27 @@ This repo is that infrastructure.
 
 | | |
 |---|---|
-| Rows | **374,571** |
-| Symbols with data | **470** (of 504 listed constituents) |
-| Coverage | **2022-01-03 → 2025-06-13** (daily bars) |
+| Rows | **526,815** |
+| Symbols | **504** — every listed constituent |
+| Coverage | **2022-01-03 → 2026-09-04** (4.7 years of daily bars) |
 | Fields | `symbol, date, open, high, low, close, volume` |
 | Prices | Split- and dividend-adjusted (`auto_adjust=True`) |
-| Storage | Parquet, **14.4 MB** — 61% smaller than the equivalent CSV (37.3 MB) |
+| Storage | Parquet, **19.7 MB** — 62% smaller than the equivalent CSV (51.8 MB) |
 | Source | Yahoo Finance via [`yfinance`](https://github.com/ranaroussi/yfinance) |
 | Refresh | GitHub Actions, weekdays 18:30 IST (13:00 UTC) |
 
-**33 constituents are intentionally absent** and logged in [`data/raw/skipped_symbols.csv`](data/raw/skipped_symbols.csv) — recent IPOs (Meesho, Lenskart, Groww, HDB Financial) and demergers (Tata Capital, ITC Hotels) with insufficient history. They are excluded rather than forward-filled, so no synthetic prices enter the dataset.
+**Coverage is uneven by construction, and that's recorded rather than hidden.** 420 of 504 symbols carry the full ~1,159-bar history; the remaining 84 are recent IPOs and demergers (Meesho, Lenskart, Groww, HDB Financial, Tata Capital, ITC Hotels) that simply did not trade for the whole window. Per-symbol first date, last date, and bar count are published in [`data/raw/coverage_report.csv`](data/raw/coverage_report.csv). Short histories are left short — never forward-filled — so no synthetic prices enter the dataset.
 
 ---
 
 ## Key features
 
-- **Incremental fetch, not full re-download.** The job reads the last date already in the Parquet master and requests only the delta — a normal weekday pull is one trading day for 470 tickers, not 3.5 years.
+- **Incremental fetch, not full re-download.** The job reads the last date already in the Parquet master and requests only the delta — a normal weekday pull is one trading day for 504 tickers, not 4.7 years.
 - **Idempotent by construction.** New rows are appended, then de-duplicated on `(symbol, date)` and re-sorted. Re-running the job on the same day is a no-op, so a retry after a failure can never double-count a bar.
 - **Fails closed on non-trading days.** Weekends exit before any network call; market holidays return an empty frame and exit cleanly instead of committing a no-change file.
-- **Explicit gap accounting.** Symbols that return no data are recorded, not silently dropped — the dataset ships with its own known-limitations file.
-- **Columnar storage.** Parquet with typed columns, chosen over CSV for the 61% size reduction and for selective column reads during the analysis step.
+- **Fails loudly, not silently.** An empty response over a multi-day window, or more than 10% of symbols returning nothing, exits non-zero instead of being written off as a market holiday. A partial update is never committed.
+- **Explicit gap accounting.** Per-symbol coverage is published alongside the data, so anyone using the dataset can see exactly which histories are short.
+- **Columnar storage.** Parquet with typed columns, chosen over CSV for the 62% size reduction and for selective column reads during the analysis step.
 - **Zero-touch publishing.** The same workflow that updates the repo pushes a new version of the public Kaggle dataset.
 
 ---
@@ -91,7 +92,7 @@ This repo is that infrastructure.
 
 **Design decisions worth defending in review:**
 
-- *Long format over wide.* A 470-column wide frame breaks whenever the index is rebalanced. Long format (`symbol, date, …`) absorbs constituent changes without a schema migration.
+- *Long format over wide.* A 504-column wide frame breaks whenever the index is rebalanced. Long format (`symbol, date, …`) absorbs constituent changes without a schema migration.
 - *Parquet as the master, not a database.* The dataset is append-only, single-writer, and read in full by the analysis step — a columnar file beats the operational cost of hosting Postgres for this access pattern.
 - *De-duplication on the natural key rather than trusting the API.* `yfinance` will happily return an overlapping window; `(symbol, date)` uniqueness is enforced on our side.
 
@@ -122,8 +123,8 @@ Load the dataset:
 import pandas as pd
 
 df = pd.read_parquet("data/raw/nifty500_ohlcv_raw.parquet")
-print(df.shape)                                  # (374571, 7)
-print(df["symbol"].nunique(), "symbols")         # 470 symbols
+print(df.shape)                                  # (526815, 7)
+print(df["symbol"].nunique(), "symbols")         # 504 symbols
 print(df["date"].min().date(), "→", df["date"].max().date())
 ```
 
@@ -154,9 +155,9 @@ nifty500-behaviour-clusters/
 │   └── daily_nse_pull.yml          # cron: fetch → commit → publish to Kaggle
 ├── data/
 │   └── raw/
-│       ├── nifty500_ohlcv_raw.parquet   # master dataset (LFS, 14.4 MB)
+│       ├── nifty500_ohlcv_raw.parquet   # master dataset (LFS, 19.7 MB)
 │       ├── nifty500_constituents.csv    # 504 symbols + sector/industry/ISIN
-│       ├── skipped_symbols.csv          # 33 symbols with no usable history
+│       ├── coverage_report.csv          # per-symbol first/last date + bar count
 │       └── dataset-metadata.json        # Kaggle publishing manifest
 ├── scripts/
 │   └── fetch_daily.py                   # incremental, idempotent fetch
@@ -191,9 +192,11 @@ The intent is to z-score these (they differ by orders of magnitude), reduce with
 
 **Committing a growing binary is a design decision with a bill attached.** Appending to a 14 MB Parquet and committing it daily writes a *new full copy* into history every weekday — several GB of LFS storage a year for a few kilobytes of new prices. Understanding that changed how I think about where mutable state belongs relative to version control.
 
-**Vendor data is dirty in specific, enumerable ways.** 33 of 504 constituents returned nothing — recent IPOs and demerged entities that simply have no 2022 history. The instinct is to forward-fill and get a clean 500. That fabricates prices. Logging them to `skipped_symbols.csv` keeps the dataset honest and makes the gap auditable by anyone using it.
+**A green build is not a working build.** Fixing the LFS checkout turned the badge green — and the job still fetched nothing, because the pinned `yfinance` was too old to talk to the current Yahoo API and the script reported the empty result as "likely a market holiday". Exit code 0 was lying. The real fix was making the failure *loud*: an empty multi-day window or a >10% symbol miss now exits non-zero. A pipeline that cannot fail visibly cannot be trusted when it succeeds.
 
-**Wide is convenient until the index rebalances.** Storing 470 tickers as columns is fast to write and brittle to maintain; every constituent change becomes a schema change. Long format costs a reshape and buys stability.
+**Vendor data is dirty in specific, enumerable ways.** 84 of 504 constituents have partial history — recent IPOs and demerged entities that did not trade for the full window. The instinct is to forward-fill and get a clean rectangle. That fabricates prices. Publishing `coverage_report.csv` keeps the gap auditable by anyone using the dataset.
+
+**Wide is convenient until the index rebalances.** Storing 504 tickers as columns is fast to write and brittle to maintain; every constituent change becomes a schema change. Long format costs a reshape and buys stability.
 
 ---
 
@@ -201,7 +204,6 @@ The intent is to z-score these (they differ by orders of magnitude), reduce with
 
 - [ ] Feature engineering + clustering notebooks, with cluster-vs-sector comparison
 - [ ] Cluster map and sector-disagreement plots in the README
-- [ ] Fail loudly when a large fraction of symbols return no data, instead of exiting 0
 - [ ] Alerting on scheduled-run failure
 - [ ] Freshness assertion in CI (fail if the master's max date lags the last trading day)
 - [ ] Extend history to 2015 for a full market-cycle view
