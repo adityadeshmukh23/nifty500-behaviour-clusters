@@ -6,3 +6,6 @@ kaggle.json
 secrets/
 *.key
 .DS_Store
+.venv/
+v[0-9]*/
+data/processed/*.tmp
