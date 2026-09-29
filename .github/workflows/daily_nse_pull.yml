@@ -4,10 +4,20 @@ on:
   schedule:
     - cron: "0 13 * * 1-5"
   workflow_dispatch:
+    inputs:
+      full_refresh:
+        description: Re-download every symbol's whole history, not only the recent sessions
+        type: boolean
+        default: false
 
 permissions:
   contents: write
   issues: write
+
+# One writer at a time: a manual run must not race the scheduled one to push the master.
+concurrency:
+  group: nse-pull
+  cancel-in-progress: false
 
 env:
   ALERT_LABEL: pipeline-failure
@@ -15,6 +25,7 @@ env:
 jobs:
   fetch-and-upload:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repo
@@ -25,6 +36,7 @@ jobs:
           lfs: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Python 3.12 is the oldest version the pinned numpy supports (see requires-python).
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
@@ -36,15 +48,24 @@ jobs:
 
       - name: Fetch new NSE data
         id: fetch
-        run: python scripts/fetch_daily.py
+        env:
+          FULL_REFRESH: ${{ inputs.full_refresh }}
+        run: |
+          if [ "$FULL_REFRESH" = "true" ]; then
+            python scripts/fetch_daily.py --full-refresh
+          else
+            python scripts/fetch_daily.py
+          fi
 
       - name: Commit updated data
         id: commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/raw/nifty500_ohlcv_raw.parquet
+          git add data/raw/nifty500_ohlcv_raw.parquet data/raw/coverage_report.csv
           git diff --staged --quiet || git commit -m "Auto: NSE data update $(date +'%Y-%m-%d')"
+          # Someone may have pushed while the fetch ran; replay on top rather than fail.
+          git pull --rebase origin main
           git push origin main
 
       - name: Push new Kaggle dataset version
@@ -95,11 +116,13 @@ jobs:
             Known causes for this pipeline, most likely first:
 
             1. `yfinance` broke against the Yahoo API again — check whether the log
-               says `FAIL: no data for a N-day window`. The pin in
-               `requirements.txt` needs a bump.
-            2. More than 10% of symbols returned nothing — upstream is degraded, or
-               the constituents list has drifted.
-            3. LFS objects were not checked out, so `pd.read_parquet` got a pointer
+               says `FAIL: no data came back for ...`. The pin in `requirements.txt`
+               needs a bump.
+            2. More than 10% of symbols returned nothing, or their history refresh
+               failed — upstream is degraded, or the constituents list has drifted.
+            3. The response schema changed (`the upstream response has no [...]
+               column(s)`) — again a yfinance version problem.
+            4. LFS objects were not checked out, so `pd.read_parquet` got a pointer
                stub. Confirm `lfs: true` is still on the checkout step.
 
       - name: Close the failure issue after a recovery

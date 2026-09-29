@@ -27,6 +27,7 @@ env:
 jobs:
   freshness:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repo
@@ -34,6 +35,7 @@ jobs:
         with:
           lfs: true
 
+      # Python 3.12 is the oldest version the pinned numpy supports (see requires-python).
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
@@ -45,7 +47,10 @@ jobs:
 
       - name: Assert the master is current
         id: freshness
-        run: python scripts/check_freshness.py --max-lag "${{ inputs.max_lag || 3 }}"
+        env:
+          # Through the environment, not interpolated into the script: it is user input.
+          MAX_LAG: ${{ inputs.max_lag || '3' }}
+        run: python scripts/check_freshness.py --max-lag "$MAX_LAG"
 
       - name: Raise or update the staleness alert
         if: failure()
@@ -69,7 +74,8 @@ jobs:
                public repositories after a stretch of inactivity. Check the Actions
                tab for a banner and re-enable it.
             2. **Runs are green but writing nothing.** Open the latest `Daily NSE
-               Pull` run and confirm it reported `New rows fetched`.
+               Pull` run and confirm it printed `Master updated` -- a run that finds
+               nothing new says `Master is unchanged`.
             3. **Credentials expired.** `KAGGLE_USERNAME` / `KAGGLE_KEY` failing can
                fail the job after the fetch but before anything useful is committed.
 
