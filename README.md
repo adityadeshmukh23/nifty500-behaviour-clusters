@@ -48,7 +48,7 @@ Quantitatively: **Adjusted Rand Index 0.013, Normalized Mutual Information 0.085
 
 The honest reading is not "sector and behaviour are independent" — the data rejects that — but **"sector explains almost none of how a stock trades."** The practical consequence: a portfolio spread across ten industries can still sit almost entirely inside the high-beta cyclical cluster and draw down like a single position. Behaviour has to be measured, not inferred from a sector column.
 
-**The smell test it passes:** the Tail-risk group is defined by one property — a single severe crash session — and every one of its 37 members has one: a worst day of -13% to -34% on 1.4–52× normal volume. Eighteen of them share a date, 2024-06-04, the day the general-election result was declared and mostly state-owned and Adani-group names lost 13–25% in one session; the rest are company-specific shocks — IndusInd Bank, Adani Enterprises, IEX, ZEEL, Cyient. Together they span 15 of the index's 20 sectors, and no sector label groups them.
+**The smell test it passes:** the Tail-risk group is defined by one property — a single severe crash session — and every one of its 37 members has one: a worst day of -13% to -34% on 1.4–52× normal volume. Eighteen of them share a date, 2024-06-04, the day the general-election result was declared, when mostly state-owned and Adani-group names lost 13–25% in one session; the rest are company-specific shocks — IndusInd Bank, Adani Enterprises, IEX, ZEEL, Cyient. Together they span 15 of the index's 20 sectors, and no sector label groups them.
 
 ---
 
@@ -60,7 +60,7 @@ The honest reading is not "sector and behaviour are independent" — the data re
 | Symbols | **504** constituents (one, `JBCHEPHARM`, has had no data since 2026-07-23) |
 | Coverage | **2022-01-03 → present** (daily bars, auto-updated) |
 | Fields | `symbol, date, open, high, low, close, volume` |
-| Prices | Split- and dividend-adjusted (`auto_adjust=True`); a symbol's history is re-downloaded whenever Yahoo re-adjusts it |
+| Prices | Split- and dividend-adjusted (`auto_adjust=True`); a symbol's history is re-downloaded when Yahoo re-adjusts it |
 | Storage | Parquet, **~20 MB** — 62% smaller than the equivalent CSV (52 MB) |
 | Source | Yahoo Finance via [`yfinance`](https://github.com/ranaroussi/yfinance) |
 | Refresh | GitHub Actions, weekdays 18:30 IST (13:00 UTC) |
@@ -245,7 +245,7 @@ nifty500-behaviour-clusters/
 │   └── workflows/
 │       ├── daily_nse_pull.yml      # cron: fetch → commit → publish to Kaggle
 │       ├── freshness.yml           # cron: assert the master has not gone stale
-│       └── tests.yml               # lint + pytest (3.12, 3.13) on every push and PR
+│       └── tests.yml               # lint + pytest (3.12, 3.13) on pushes to main and every PR
 ├── data/
 │   ├── raw/
 │   │   ├── nifty500_ohlcv_raw.parquet   # master dataset (LFS, ~20 MB)
@@ -280,7 +280,8 @@ nifty500-behaviour-clusters/
 │   ├── test_freshness.py                # staleness calendar edges
 │   ├── test_features.py                 # feature math on known price paths
 │   ├── test_clustering.py               # reduction, stability, naming rules
-│   └── test_artifacts.py                # committed outputs agree with each other and this README
+│   ├── test_artifacts.py                # committed outputs agree with each other and this README
+│   └── test_notebooks.py                # notebooks ran cleanly, in order, on the date they pin
 ├── docs/                                # generated figures
 ├── pyproject.toml                       # package metadata, pytest and ruff config
 ├── requirements.txt                     # pipeline runtime, pinned
@@ -332,6 +333,7 @@ nifty500-behaviour-clusters/
 - 66 recent listings are excluded for lack of history, so the newest and often most volatile corner of the index is under-represented.
 - The universe is a snapshot of the constituents file, so it carries survivorship bias: stocks that left the index before it was taken are not in the history. Delisted names stay in the file until it is refreshed and are tolerated rather than failed.
 - Corporate actions under the 40% threshold are found by review, not by an exchange feed. The register lists three, each marked "verify"; others may remain.
+- The daily overlap catches a re-adjustment that arrives after a symbol's last stored bar. A correction Yahoo makes to older history — or a seam left by the append-only pipeline that ran before this one — needs a manual `--full-refresh`.
 - `log_turnover` multiplies adjusted prices by unadjusted volume, so for the few symbols with a split inside the window it is mis-scaled before the split; the median across ~740 sessions mutes that but does not remove it.
 - KMeans imposes spherical clusters. Given the silhouette analysis, the boundaries are conveniences rather than discoveries.
 

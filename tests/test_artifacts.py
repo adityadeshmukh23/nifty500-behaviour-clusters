@@ -112,10 +112,12 @@ class TestReadmeAgreesWithTheOutputs:
     def test_the_result_table_quotes_the_committed_cluster_sizes(self, readme, profiles):
         quoted = {name: int(n) for name, n in
                   re.findall(r"^\| \*\*(.+?)\*\* \| (\d+) \|", readme, flags=re.MULTILINE)}
-        assert quoted == dict(zip(profiles["name"], profiles["n"], strict=True))
+        committed = dict(zip(profiles["name"], profiles["n"], strict=True))
+        assert quoted == committed, f"README table {quoted} != committed profiles {committed}"
 
     def test_the_universe_size_is_the_committed_one(self, readme, features):
-        assert f"from {len(features)} stocks" in readme
+        assert f"from {len(features)} stocks" in readme, \
+            f"the README does not say the universe is {len(features)} stocks"
 
     def test_the_headline_agreement_with_sector_is_the_computed_one(self, readme, clusters):
         codes = clusters["industry"].astype("category").cat.codes
@@ -131,15 +133,16 @@ class TestReadmeAgreesWithTheOutputs:
         notebook = (ROOT / "notebooks" / "01_feature_engineering.ipynb").read_text()
         pinned = re.search(r'AS_OF = \\"(\d{4}-\d{2}-\d{2})\\"', notebook)
         assert pinned, "notebook 01 no longer pins AS_OF"
-        assert f"through **{pinned.group(1)}**" in readme
+        assert f"through **{pinned.group(1)}**" in readme, \
+            f"the README does not say the analysis is pinned to {pinned.group(1)}"
 
 
 class TestSupportedPythonAndPins:
     def test_the_readme_states_the_range_pyproject_declares(self, readme):
         project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
         assert project["requires-python"] == ">=3.12,<3.14"
-        assert "Python 3.12 or 3.13" in readme
-        assert "3.11" not in readme
+        assert "Python 3.12 or 3.13" in readme, "the README no longer states the supported Pythons"
+        assert "3.11" not in readme, "the README mentions a Python version the pins do not support"
 
     def test_workflows_only_use_supported_python_versions(self):
         for workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
