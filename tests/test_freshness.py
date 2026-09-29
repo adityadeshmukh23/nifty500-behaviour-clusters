@@ -10,9 +10,12 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from scripts.check_freshness import (DEFAULT_MAX_LAG_BUSINESS_DAYS,
-                                     business_days_between, check,
-                                     latest_bar_date)
+from nifty500.freshness import (
+    DEFAULT_MAX_LAG_BUSINESS_DAYS,
+    business_days_between,
+    check,
+    latest_bar_date,
+)
 
 
 @pytest.fixture
@@ -57,6 +60,24 @@ class TestBusinessDaysBetween:
 class TestLatestBarDate:
     def test_reads_the_newest_date(self, master):
         assert latest_bar_date(master("2026-09-04")) == date(2026, 9, 4)
+
+
+class TestUnpricedNewestSession:
+    def test_a_session_of_unpriced_rows_does_not_count_as_fresh(self, tmp_path):
+        # A run that appends a date without any price has written nothing useful,
+        # so the newest *valid* bar is still the earlier one.
+        path = tmp_path / "master.parquet"
+        dates = pd.bdate_range("2026-09-01", "2026-09-04")
+        frame = pd.DataFrame({"symbol": "AAA", "date": dates, "open": 100.0, "high": 100.0,
+                              "low": 100.0, "close": 100.0, "volume": 1_000.0})
+        unpriced = frame.iloc[[-1]].copy()
+        unpriced["date"] = pd.Timestamp("2026-09-21")
+        unpriced[["open", "high", "low", "close"]] = float("nan")
+        pd.concat([frame, unpriced]).to_parquet(path, index=False)
+
+        assert latest_bar_date(path) == date(2026, 9, 4)
+        fresh, lag, _ = check(path, today=date(2026, 9, 22))
+        assert not fresh and lag > DEFAULT_MAX_LAG_BUSINESS_DAYS
 
 
 class TestCheck:

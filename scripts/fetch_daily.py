@@ -1,121 +1,78 @@
-import yfinance as yf
-import pandas as pd
-from pathlib import Path
-from datetime import datetime, timedelta
+"""Refresh the OHLCV master from Yahoo Finance, then rebuild the coverage report.
+
+Run from the repository root. The logic lives in `nifty500.ingest`; this script
+only supplies the network call and the file paths.
+
+It exits non-zero whenever the result cannot be trusted -- an empty response, no
+usable bars, too many symbols missing -- so a scheduled run that fetched nothing
+is red rather than a green run that quietly wrote nothing.
+"""
+
+import argparse
 import sys
+from datetime import UTC, datetime
+from pathlib import Path
 
-PARQUET_PATH = Path("data/raw/nifty500_ohlcv_raw.parquet")
+import pandas as pd
+import yfinance as yf
+
+from nifty500.coverage import build_coverage_report
+from nifty500.ingest import PipelineError, load_symbols, update_master, write_master
+
+MASTER_PATH = Path("data/raw/nifty500_ohlcv_raw.parquet")
 CONSTITUENTS_PATH = Path("data/raw/nifty500_constituents.csv")
+COVERAGE_PATH = Path("data/raw/coverage_report.csv")
 
-# Fail loudly rather than exiting 0 on a partial or empty fetch: a silent
-# success here is what let 50 scheduled runs look like market holidays.
-MAX_MISSING_RATIO = 0.10
-MAX_HOLIDAY_GAP_DAYS = 5
 
-def is_weekend():
-    if datetime.today().weekday() >= 5:
-        print("Today is a weekend. No market data expected.")
-        return True
-    return False
-
-def get_last_date_in_master():
-    master = pd.read_parquet(PARQUET_PATH)
-    last_date = pd.to_datetime(master["date"]).max()
-    print(f"Last date in master: {last_date.date()}")
-    return last_date
-
-def fetch_new_data(symbols_ns, start_date, end_date):
-    print(f"Fetching {start_date.date()} to {end_date.date()} for {len(symbols_ns)} symbols...")
-    data = yf.download(
+def yahoo_download(symbols_ns, start, end):
+    """The one place that touches the network. `end` is exclusive."""
+    print(f"Fetching {start} to {end} (end exclusive) for {len(symbols_ns)} symbols...")
+    return yf.download(
         symbols_ns,
-        start=start_date.strftime("%Y-%m-%d"),
-        end=end_date.strftime("%Y-%m-%d"),
+        start=start.strftime("%Y-%m-%d"),
+        end=end.strftime("%Y-%m-%d"),
         auto_adjust=True,
         group_by="ticker",
         threads=True,
-        progress=False
+        progress=False,
     )
-    return data
 
-def reshape_to_long(data, symbols_ns):
-    frames = []
-    missing = []
-    for symbol_ns in symbols_ns:
-        try:
-            df = data[symbol_ns].copy()
-            df = df.dropna(how="all")
-            if len(df) == 0:
-                missing.append(symbol_ns)
-                continue
-            df["symbol"] = symbol_ns.replace(".NS", "")
-            df = df.reset_index()
-            df.columns = [c.lower() for c in df.columns]
-            frames.append(df)
-        except KeyError:
-            missing.append(symbol_ns)
-    if missing:
-        print(f"No data for {len(missing)}/{len(symbols_ns)} symbols: "
-              f"{', '.join(missing[:10])}{' ...' if len(missing) > 10 else ''}")
-    if not frames:
-        return pd.DataFrame(), missing
-    combined = pd.concat(frames, ignore_index=True)
-    combined = combined[["symbol", "date", "open", "high", "low", "close", "volume"]]
-    combined["date"] = pd.to_datetime(combined["date"])
-    return combined, missing
 
-def main():
-    if is_weekend():
-        print("Skipping — weekend.")
-        sys.exit(0)
+def main(argv=None, download=yahoo_download, today=None):
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--full-refresh", action="store_true",
+                        help="re-download every symbol's whole history, not only the recent "
+                             "sessions. A replacement shorter than the stored history is "
+                             "rejected, so this cannot shorten the master.")
+    args = parser.parse_args(argv)
 
-    constituents = pd.read_csv(CONSTITUENTS_PATH)
-    symbols_ns = [s.strip() + ".NS" for s in constituents["Symbol"].tolist()]
+    symbols = load_symbols(CONSTITUENTS_PATH)
+    master = pd.read_parquet(MASTER_PATH)
+    today = today or datetime.now(UTC).date()
 
-    last_date = get_last_date_in_master()
-    fetch_start = last_date + timedelta(days=1)
-    fetch_end = datetime.today() + timedelta(days=1)
+    try:
+        updated, report = update_master(
+            master, symbols, download, today,
+            refresh_symbols=symbols if args.full_refresh else (),
+        )
+    except PipelineError as error:
+        print(f"FAIL: {error}")
+        return 1
 
-    if fetch_start.date() >= datetime.today().date():
-        print("Master is already up to date. Nothing to fetch.")
-        sys.exit(0)
+    for line in report.lines():
+        print(line)
 
-    raw = fetch_new_data(symbols_ns, fetch_start, fetch_end)
+    if not report.changed:
+        print("Master is unchanged: no new sessions (a market holiday, or Yahoo has not "
+              "finalised today's bars yet).")
+        return 0
 
-    requested_days = (fetch_end - fetch_start).days
+    write_master(updated, MASTER_PATH)
+    build_coverage_report(updated, symbols).to_csv(COVERAGE_PATH, index=False)
+    print(f"Master updated: {len(updated):,} rows, latest date: {report.last_bar_after}")
+    return 0
 
-    if raw is None or raw.empty:
-        # A one- or two-day window can legitimately be a market holiday.
-        # A wide window returning nothing means the upstream API broke.
-        if requested_days > MAX_HOLIDAY_GAP_DAYS:
-            print(f"FAIL: no data for a {requested_days}-day window across "
-                  f"{len(symbols_ns)} symbols. This is not a holiday — "
-                  f"the upstream API or the yfinance version is broken.")
-            sys.exit(1)
-        print("No new data returned — likely a market holiday.")
-        sys.exit(0)
-
-    new_df, missing = reshape_to_long(raw, symbols_ns)
-
-    missing_ratio = len(missing) / len(symbols_ns)
-    if missing_ratio > MAX_MISSING_RATIO:
-        print(f"FAIL: {missing_ratio:.0%} of symbols returned no data "
-              f"(threshold {MAX_MISSING_RATIO:.0%}). Refusing to commit a "
-              f"partial update.")
-        sys.exit(1)
-
-    if new_df.empty:
-        print("FAIL: no rows after reshape despite a non-empty response.")
-        sys.exit(1)
-
-    print(f"New rows fetched: {len(new_df)}")
-
-    master = pd.read_parquet(PARQUET_PATH)
-    master = pd.concat([master, new_df], ignore_index=True)
-    master = master.drop_duplicates(subset=["symbol", "date"])
-    master = master.sort_values(["symbol", "date"]).reset_index(drop=True)
-    master.to_parquet(PARQUET_PATH, index=False)
-
-    print(f"Master updated: {master.shape[0]} rows, latest date: {master['date'].max().date()}")
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

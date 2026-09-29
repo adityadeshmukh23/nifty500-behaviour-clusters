@@ -33,7 +33,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 # `src` layout: this lets a plain `pytest` resolve `import nifty500` from a fresh
 # clone, with or without an editable install.
-pythonpath = ["src", "."]
+pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "-q"
 filterwarnings = [
