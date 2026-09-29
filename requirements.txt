@@ -1,6 +1,13 @@
-# Pinned for reproducibility. yfinance in particular changes its
-# response schema between minor versions; unpinning it breaks the pipeline.
+# Pipeline runtime. Pinned for reproducibility: yfinance in particular changes its
+# response schema between minor versions, and unpinning it breaks the pipeline.
+#
+# These pins have wheels for CPython 3.12 and 3.13 (see requires-python in
+# pyproject.toml). Run pip from the repository root: `-e .` below is relative to it.
 yfinance==1.7.0
+numpy==2.5.2
 pandas==2.2.3
 pyarrow==18.1.0
 kaggle==1.6.17
+
+# The package itself (src/nifty500), editable so the scripts and notebooks import it.
+-e .

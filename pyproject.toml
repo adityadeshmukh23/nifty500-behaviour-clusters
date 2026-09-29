@@ -1,6 +1,52 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nifty500-behaviour-clusters"
+version = "0.1.0"
+description = "Automated NSE data pipeline for the Nifty 500, and a behavioural clustering of its constituents."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Aditya Deshmukh" }]
+
+# The exact pins in requirements*.txt have wheels for CPython 3.12 and 3.13 only:
+# numpy 2.5 needs 3.12+, and pandas 2.2.3 / pyarrow 18.1.0 predate 3.14. Declaring
+# the range here turns a confusing resolver failure into a clear one.
+requires-python = ">=3.12,<3.14"
+
+# Abstract requirements only. Exact, reproducible pins live in requirements*.txt.
+dependencies = [
+    "numpy>=2.0",
+    "pandas>=2.2,<3",
+    "pyarrow>=18",
+]
+
+[project.optional-dependencies]
+pipeline = ["yfinance>=1.7"]
+analysis = ["scikit-learn>=1.9", "matplotlib>=3.10", "seaborn>=0.13"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.pytest.ini_options]
-# Put the repo root on sys.path so `from src.features import ...` resolves when
-# tests are run as plain `pytest tests/` and not only as `python -m pytest`.
-pythonpath = ["."]
+# `src` layout: this lets a plain `pytest` resolve `import nifty500` from a fresh
+# clone, with or without an editable install.
+pythonpath = ["src", "."]
 testpaths = ["tests"]
 addopts = "-q"
+filterwarnings = [
+    # pandas 2.2.3 predates NumPy 2.5 and trips this inside DataFrame concat.
+    # Nothing in this repository is affected; the filter keeps real warnings visible.
+    "ignore:The 'generic' unit for NumPy timedelta:DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+# E/W: pycodestyle, F: pyflakes, I: import order, B: bugbear, UP: pyupgrade.
+select = ["E", "F", "W", "I", "B", "UP"]

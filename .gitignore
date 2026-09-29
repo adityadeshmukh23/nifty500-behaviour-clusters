@@ -9,3 +9,9 @@ secrets/
 .venv/
 v[0-9]*/
 data/processed/*.tmp
+data/raw/*.tmp
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/

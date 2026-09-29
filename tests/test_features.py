@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.features import (CORPORATE_ACTION_THRESHOLD, TRADING_DAYS,
+from nifty500.features import (CORPORATE_ACTION_THRESHOLD, TRADING_DAYS,
                           _max_drawdown, _trailing_return, build_features,
                           daily_returns, select_universe)
 

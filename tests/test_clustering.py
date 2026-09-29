@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.clustering import (fit_clusters, name_clusters, profile_clusters,
+from nifty500.clustering import (fit_clusters, name_clusters, profile_clusters,
                             reduce_features, sweep_k)
-from src.features import FEATURE_COLUMNS
+from nifty500.features import FEATURE_COLUMNS
 
 
 def make_features(n_per_group=40, seed=0):
