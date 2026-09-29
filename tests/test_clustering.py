@@ -4,8 +4,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from nifty500.clustering import (fit_clusters, name_clusters, profile_clusters,
-                            reduce_features, sweep_k)
+from nifty500.clustering import (
+    fit_clusters,
+    name_clusters,
+    profile_clusters,
+    reduce_features,
+    sweep_k,
+)
 from nifty500.features import FEATURE_COLUMNS
 
 
@@ -80,6 +85,17 @@ class TestSweepK:
         diagnostics = sweep_k(components, k_values=[3], n_trials=10)
         assert diagnostics.loc[3, "stability"] > 0.9
 
+    def test_the_sweep_describes_the_partition_that_fit_clusters_returns(self):
+        # Regression. The sweep used fewer restarts than the final fit, so at k=5 it
+        # scored a different local optimum from the one the notebook then adopted.
+        from sklearn.metrics import silhouette_score
+
+        features = make_features()
+        components, _, _ = reduce_features(features)
+        row = sweep_k(components, k_values=[3], n_trials=2).loc[3]
+        adopted = fit_clusters(components, 3)
+        assert row["silhouette"] == pytest.approx(silhouette_score(components, adopted))
+
     def test_sector_columns_appear_only_when_labels_are_given(self):
         features = make_features()
         components, _, _ = reduce_features(features)
@@ -148,3 +164,34 @@ class TestNameClusters:
             "return_kurtosis": [3.0, 22.0, 4.0],
         })
         assert name_clusters(profile)[1] == "Tail-risk"
+
+    def test_leftover_clusters_get_distinct_names(self):
+        # Regression. With no left-tailed and no momentum cluster, three clusters were
+        # left over and all called "Quiet mid-caps" -- so a crosstab keyed on the name
+        # silently merged them into one row.
+        profile = pd.DataFrame({
+            "ann_volatility": [0.20, 0.45, 0.30, 0.33, 0.36],
+            "beta": [0.7, 1.4, 0.9, 1.0, 1.1],
+            "mom_12m": [0.02, 0.05, 0.03, 0.04, 0.01],
+            "return_skew": [0.3, 0.3, 0.4, 0.2, 0.5],
+        })
+        names = name_clusters(profile)
+        assert len(set(names.values())) == len(profile)
+        # Calmest leftover keeps the base name; the rest are numbered upward.
+        assert names[2] == "Quiet mid-caps"
+        assert names[3] == "Quiet mid-caps (2)"
+        assert names[4] == "Quiet mid-caps (3)"
+
+    def test_leftover_numbering_survives_a_permutation_of_cluster_ids(self):
+        profile = pd.DataFrame({
+            "ann_volatility": [0.20, 0.45, 0.30, 0.33, 0.36],
+            "beta": [0.7, 1.4, 0.9, 1.0, 1.1],
+            "mom_12m": [0.02, 0.05, 0.03, 0.04, 0.01],
+            "return_skew": [0.3, 0.3, 0.4, 0.2, 0.5],
+        })
+        shuffled = profile.iloc[[4, 2, 0, 3, 1]].reset_index(drop=True)
+        by_volatility = {profile.loc[i, "ann_volatility"]: n
+                         for i, n in name_clusters(profile).items()}
+        by_volatility_shuffled = {shuffled.loc[i, "ann_volatility"]: n
+                                  for i, n in name_clusters(shuffled).items()}
+        assert by_volatility == by_volatility_shuffled

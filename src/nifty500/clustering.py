@@ -1,22 +1,34 @@
 """Clustering of behavioural features, plus the diagnostics used to choose k.
 
-Silhouette alone is not enough here: it rises monotonically toward small k on
-this data, and its absolute values (~0.2) say the behaviour space is a
-continuum rather than a set of well-separated blobs. Cluster count is therefore
-chosen against a bootstrap stability curve as well, and the trade-off is
-recorded rather than hidden behind a single number.
+Silhouette alone is not enough here: it is highest at k=2 and low everywhere,
+and its absolute values (~0.2) say the behaviour space is a continuum rather
+than a set of well-separated blobs. Cluster count is therefore chosen against a
+bootstrap stability curve as well, and the trade-off is recorded rather than
+hidden behind a single number.
 """
 
 import numpy as np
 import pandas as pd
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
-from sklearn.metrics import (adjusted_rand_score, davies_bouldin_score,
-                             normalized_mutual_info_score, silhouette_score)
+from sklearn.metrics import (
+    adjusted_rand_score,
+    davies_bouldin_score,
+    normalized_mutual_info_score,
+    silhouette_score,
+)
 from sklearn.preprocessing import StandardScaler
 
 RANDOM_STATE = 42
 PCA_VARIANCE_TARGET = 0.90
+
+# KMeans restarts, shared by the k sweep and the final fit so that the diagnostics
+# describe exactly the partition that gets adopted. With fewer restarts the sweep
+# can settle in a different local optimum: it reported an ARI of 0.0104 at k=5
+# while the adopted partition scored 0.0129.
+N_INIT = 50
+
+DEFAULT_K_VALUES = tuple(range(2, 13))
 
 # Qualifying bars for the two conditional cluster names. Skew is compared
 # absolutely (a left tail is meaningful in itself); momentum is compared to the
@@ -51,8 +63,7 @@ def bootstrap_stability(components, k, n_trials=30, sample_frac=0.8,
     particular sample is not a finding.
     """
     rng = np.random.default_rng(random_state)
-    reference = KMeans(n_clusters=k, random_state=random_state,
-                       n_init=20).fit_predict(components)
+    reference = fit_clusters(components, k, random_state)
 
     scores = []
     for trial in range(n_trials):
@@ -64,12 +75,11 @@ def bootstrap_stability(components, k, n_trials=30, sample_frac=0.8,
     return float(np.mean(scores))
 
 
-def sweep_k(components, k_values=range(2, 13), sector_codes=None, n_trials=30):
+def sweep_k(components, k_values=DEFAULT_K_VALUES, sector_codes=None, n_trials=30):
     """Diagnostics for every candidate k, as a tidy frame."""
     rows = []
     for k in k_values:
-        labels = KMeans(n_clusters=k, random_state=RANDOM_STATE,
-                        n_init=20).fit_predict(components)
+        labels = fit_clusters(components, k)
         row = {
             "k": k,
             "silhouette": silhouette_score(components, labels),
@@ -85,7 +95,7 @@ def sweep_k(components, k_values=range(2, 13), sector_codes=None, n_trials=30):
 
 def fit_clusters(components, k, random_state=RANDOM_STATE):
     return KMeans(n_clusters=k, random_state=random_state,
-                  n_init=50).fit_predict(components)
+                  n_init=N_INIT).fit_predict(components)
 
 
 def name_clusters(profile):
@@ -98,6 +108,10 @@ def name_clusters(profile):
     tail-risk or momentum group if some cluster actually looks like one. Naming
     them unconditionally would relabel the calmest cluster in a three-way split
     as "Tail-risk" purely for being the least calm.
+
+    Names are always unique. When conditional claims fail, several clusters can be
+    left with no distinguishing trait; they share the base name and are numbered
+    from calmest upward, so the crosstab keyed on name can never merge two clusters.
     """
     remaining = list(profile.index)
     names = {}
@@ -122,8 +136,11 @@ def name_clusters(profile):
     claim(lambda p: p["beta"].idxmax(), "High-beta cyclicals")
     claim(lambda p: p["ann_volatility"].idxmin(), "Large-cap defensives")
 
-    for leftover in list(remaining):
-        names[leftover] = "Quiet mid-caps"
+    # Ordered by volatility, not by cluster id, so the numbering survives a re-run
+    # that permutes the ids.
+    leftovers = profile.loc[remaining].sort_values("ann_volatility").index
+    for rank, leftover in enumerate(leftovers, start=1):
+        names[leftover] = "Quiet mid-caps" if rank == 1 else f"Quiet mid-caps ({rank})"
         remaining.remove(leftover)
 
     return names
