@@ -83,8 +83,7 @@ class UpdateReport:
             ("removed as non-bars", removed),
         ]
         if self.refreshed:
-            rows.append(("history refreshed",
-                         f"{_preview(self.refreshed)} -- prices were re-adjusted upstream"))
+            rows.append(("history refreshed", _preview(self.refreshed)))
         if self.refresh_failed:
             rows.append(("refresh FAILED", _preview(self.refresh_failed)))
         if self.missing:
